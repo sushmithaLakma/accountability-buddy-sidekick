@@ -1,6 +1,5 @@
 import express from 'express';
 import { fileURLToPath } from 'node:url';
-import { transaction } from './db.js';
 import {
   SESSION_COOKIE,
   SESSION_TTL_DAYS,
@@ -150,169 +149,145 @@ function createLoginLimiter({ maxFailures = 10, windowMs = 15 * 60 * 1000 } = {}
   };
 }
 
+
+// All SQL lives here, written in the dialect shared by SQLite and Postgres.
+const SQL = {
+  userById: 'SELECT * FROM users WHERE id = ?',
+  userByName: 'SELECT * FROM users WHERE lower(username) = lower(?)',
+  insertUser: `INSERT INTO users (username, display_name, password_hash, timezone, created_at)
+               VALUES (?, ?, ?, ?, ?) RETURNING id`,
+  updateUser: 'UPDATE users SET display_name = ?, timezone = ? WHERE id = ?',
+
+  insertSession: 'INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)',
+  sessionUser: `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+                WHERE s.token_hash = ? AND s.expires_at > ?`,
+  deleteSession: 'DELETE FROM sessions WHERE token_hash = ?',
+  purgeSessions: 'DELETE FROM sessions WHERE expires_at <= ?',
+
+  partnershipById: 'SELECT * FROM partnerships WHERE id = ?',
+  partnershipsForUser: `SELECT * FROM partnerships
+                        WHERE (requester_id = ? OR addressee_id = ?) AND status IN ('pending', 'active')
+                        ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at DESC`,
+  openPartnershipBetween: `SELECT * FROM partnerships
+                           WHERE status IN ('pending', 'active')
+                             AND ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?))`,
+  insertPartnership: `INSERT INTO partnerships (requester_id, addressee_id, created_at)
+                      VALUES (?, ?, ?) RETURNING id`,
+  setPartnershipStatus: 'UPDATE partnerships SET status = ? WHERE id = ?',
+  acceptPartnership: "UPDATE partnerships SET status = 'active', accepted_at = ? WHERE id = ?",
+  deletePartnership: 'DELETE FROM partnerships WHERE id = ?',
+  setInterval: 'UPDATE partnerships SET checkin_interval_days = ? WHERE id = ?',
+
+  goalById: 'SELECT * FROM goals WHERE id = ?',
+  currentGoals: `SELECT * FROM goals
+                 WHERE user_id = ?
+                   AND ((horizon = 'week' AND period_start >= ?) OR (horizon = 'month' AND period_start >= ?))
+                 ORDER BY period_start, horizon DESC, CASE status WHEN 'active' THEN 0 ELSE 1 END, id`,
+  pastGoals: `SELECT * FROM goals
+              WHERE user_id = ?
+                AND ((horizon = 'week' AND period_start < ?) OR (horizon = 'month' AND period_start < ?))
+              ORDER BY period_start DESC, id DESC LIMIT 100`,
+  insertGoal: `INSERT INTO goals (user_id, title, details, horizon, period_start, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+  updateGoal: 'UPDATE goals SET title = ?, details = ?, status = ?, progress = ?, updated_at = ? WHERE id = ?',
+  deleteGoal: 'DELETE FROM goals WHERE id = ?',
+
+  taskById: 'SELECT * FROM tasks WHERE id = ?',
+  tasksForDay: 'SELECT * FROM tasks WHERE user_id = ? AND day = ? ORDER BY done, id',
+  insertTask: `INSERT INTO tasks (user_id, day, title, kind, goal_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+  updateTask: 'UPDATE tasks SET title = ?, done = ?, done_at = ? WHERE id = ?',
+  deleteTask: 'DELETE FROM tasks WHERE id = ?',
+  openTasksForDay: 'SELECT * FROM tasks WHERE user_id = ? AND day = ? AND done = 0 ORDER BY id',
+  taskExists: 'SELECT 1 AS found FROM tasks WHERE user_id = ? AND day = ? AND title = ?',
+  lastDayWithOpenTasks: 'SELECT MAX(day) AS day FROM tasks WHERE user_id = ? AND day < ? AND done = 0',
+
+  lastCheckin: 'SELECT MAX(created_at) AS at FROM checkins WHERE partnership_id = ? AND user_id = ?',
+  checkins: 'SELECT * FROM checkins WHERE partnership_id = ? ORDER BY created_at DESC, id DESC LIMIT ?',
+  insertCheckin: `INSERT INTO checkins (partnership_id, user_id, mood, wins, struggles, next_focus, created_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+  checkinById: 'SELECT * FROM checkins WHERE id = ?',
+
+  messagesAfter: 'SELECT * FROM messages WHERE partnership_id = ? AND id > ? ORDER BY id LIMIT 200',
+  latestMessages: `SELECT * FROM (SELECT * FROM messages WHERE partnership_id = ? ORDER BY id DESC LIMIT 100) AS recent
+                   ORDER BY id`,
+  insertMessage: 'INSERT INTO messages (partnership_id, user_id, body, created_at) VALUES (?, ?, ?, ?) RETURNING id',
+  messageById: 'SELECT * FROM messages WHERE id = ?',
+};
+
+const isUniqueViolation = (err) => err?.code === '23505' || /UNIQUE constraint failed/.test(err?.message ?? '');
+
 export function createApp(db, { secureCookies = false, now = () => new Date() } = {}) {
   const app = express();
   const limiter = createLoginLimiter();
-
-  // ---------- prepared statements ----------
-  const q = {
-    userById: db.prepare('SELECT * FROM users WHERE id = ?'),
-    userByName: db.prepare('SELECT * FROM users WHERE username = ?'),
-    insertUser: db.prepare(
-      'INSERT INTO users (username, display_name, password_hash, timezone) VALUES (?, ?, ?, ?)',
-    ),
-    updateUser: db.prepare('UPDATE users SET display_name = ?, timezone = ? WHERE id = ?'),
-
-    insertSession: db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)'),
-    sessionUser: db.prepare(
-      `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token_hash = ? AND s.expires_at > ?`,
-    ),
-    deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
-    purgeSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
-
-    partnershipById: db.prepare('SELECT * FROM partnerships WHERE id = ?'),
-    partnershipsForUser: db.prepare(
-      `SELECT * FROM partnerships
-       WHERE (requester_id = ? OR addressee_id = ?) AND status IN ('pending', 'active')
-       ORDER BY status = 'active' DESC, created_at DESC`,
-    ),
-    openPartnershipBetween: db.prepare(
-      `SELECT * FROM partnerships
-       WHERE status IN ('pending', 'active')
-         AND ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?))`,
-    ),
-    insertPartnership: db.prepare('INSERT INTO partnerships (requester_id, addressee_id) VALUES (?, ?)'),
-    setPartnershipStatus: db.prepare('UPDATE partnerships SET status = ? WHERE id = ?'),
-    acceptPartnership: db.prepare(
-      "UPDATE partnerships SET status = 'active', accepted_at = ? WHERE id = ?",
-    ),
-    deletePartnership: db.prepare('DELETE FROM partnerships WHERE id = ?'),
-    setInterval: db.prepare('UPDATE partnerships SET checkin_interval_days = ? WHERE id = ?'),
-
-    goalById: db.prepare('SELECT * FROM goals WHERE id = ?'),
-    currentGoals: db.prepare(
-      `SELECT * FROM goals
-       WHERE user_id = ?
-         AND ((horizon = 'week' AND period_start >= ?) OR (horizon = 'month' AND period_start >= ?))
-       ORDER BY period_start, horizon DESC, status = 'active' DESC, id`,
-    ),
-    pastGoals: db.prepare(
-      `SELECT * FROM goals
-       WHERE user_id = ?
-         AND ((horizon = 'week' AND period_start < ?) OR (horizon = 'month' AND period_start < ?))
-       ORDER BY period_start DESC, id DESC LIMIT 100`,
-    ),
-    insertGoal: db.prepare(
-      'INSERT INTO goals (user_id, title, details, horizon, period_start) VALUES (?, ?, ?, ?, ?)',
-    ),
-    updateGoal: db.prepare(
-      `UPDATE goals SET title = ?, details = ?, status = ?, progress = ?,
-         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ?`,
-    ),
-    deleteGoal: db.prepare('DELETE FROM goals WHERE id = ?'),
-
-    taskById: db.prepare('SELECT * FROM tasks WHERE id = ?'),
-    tasksForDay: db.prepare('SELECT * FROM tasks WHERE user_id = ? AND day = ? ORDER BY done, id'),
-    insertTask: db.prepare('INSERT INTO tasks (user_id, day, title, kind, goal_id) VALUES (?, ?, ?, ?, ?)'),
-    updateTask: db.prepare('UPDATE tasks SET title = ?, done = ?, done_at = ? WHERE id = ?'),
-    deleteTask: db.prepare('DELETE FROM tasks WHERE id = ?'),
-    openTasksForDay: db.prepare('SELECT * FROM tasks WHERE user_id = ? AND day = ? AND done = 0 ORDER BY id'),
-    taskExists: db.prepare('SELECT 1 FROM tasks WHERE user_id = ? AND day = ? AND title = ?'),
-    lastDayWithOpenTasks: db.prepare(
-      'SELECT MAX(day) AS day FROM tasks WHERE user_id = ? AND day < ? AND done = 0',
-    ),
-
-    lastCheckin: db.prepare(
-      'SELECT MAX(created_at) AS at FROM checkins WHERE partnership_id = ? AND user_id = ?',
-    ),
-    checkins: db.prepare(
-      'SELECT * FROM checkins WHERE partnership_id = ? ORDER BY created_at DESC, id DESC LIMIT ?',
-    ),
-    insertCheckin: db.prepare(
-      `INSERT INTO checkins (partnership_id, user_id, mood, wins, struggles, next_focus, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ),
-    checkinById: db.prepare('SELECT * FROM checkins WHERE id = ?'),
-
-    messagesAfter: db.prepare(
-      'SELECT * FROM messages WHERE partnership_id = ? AND id > ? ORDER BY id LIMIT 200',
-    ),
-    latestMessages: db.prepare(
-      `SELECT * FROM (SELECT * FROM messages WHERE partnership_id = ? ORDER BY id DESC LIMIT 100)
-       ORDER BY id`,
-    ),
-    insertMessage: db.prepare(
-      'INSERT INTO messages (partnership_id, user_id, body, created_at) VALUES (?, ?, ?, ?)',
-    ),
-    messageById: db.prepare('SELECT * FROM messages WHERE id = ?'),
-  };
 
   // ---------- domain helpers ----------
 
   const nowIso = () => now().toISOString();
   const userToday = (user) => todayIn(user.timezone, now());
+  const insertId = async (sql, params) => Number((await db.get(sql, params)).id);
 
-  function checkinStatus(p, userId) {
-    const last = q.lastCheckin.get(p.id, userId)?.at ?? null;
+  async function checkinStatus(p, userId) {
+    const last = (await db.get(SQL.lastCheckin, [p.id, userId]))?.at ?? null;
     const dueAt = last
       ? new Date(new Date(last).getTime() + p.checkin_interval_days * DAY_MS).toISOString()
       : null;
     return { lastAt: last, dueAt, isDue: !last || new Date(dueAt) <= now() };
   }
 
-  function partnershipOut(p, me) {
+  async function partnershipOut(p, me) {
     const partnerId = p.requester_id === me.id ? p.addressee_id : p.requester_id;
     const out = {
       id: p.id,
       status: p.status,
       direction: p.requester_id === me.id ? 'outgoing' : 'incoming',
-      partner: publicUser(q.userById.get(partnerId)),
+      partner: publicUser(await db.get(SQL.userById, [partnerId])),
       checkinIntervalDays: p.checkin_interval_days,
       createdAt: p.created_at,
       acceptedAt: p.accepted_at,
     };
     if (p.status === 'active') {
-      out.checkins = { me: checkinStatus(p, me.id), partner: checkinStatus(p, partnerId) };
+      out.checkins = { me: await checkinStatus(p, me.id), partner: await checkinStatus(p, partnerId) };
     }
     return out;
   }
 
+  const partnershipById = async (id, me) => partnershipOut(await db.get(SQL.partnershipById, [id]), me);
+
   /** Loads a partnership the current user belongs to, or 404s. */
-  function loadPartnership(req, { active = true } = {}) {
-    const p = q.partnershipById.get(idParam(req));
+  async function loadPartnership(req, { active = true } = {}) {
+    const p = await db.get(SQL.partnershipById, [idParam(req)]);
     const me = req.user.id;
     if (!p || (p.requester_id !== me && p.addressee_id !== me)) fail(404, 'Partnership not found');
     if (active && p.status !== 'active') fail(409, 'This partnership is not active');
-    const partner = q.userById.get(p.requester_id === me ? p.addressee_id : p.requester_id);
+    const partner = await db.get(SQL.userById, [p.requester_id === me ? p.addressee_id : p.requester_id]);
     return { p, partner };
   }
 
-  function ownGoal(req) {
-    const g = q.goalById.get(idParam(req));
+  async function ownGoal(req) {
+    const g = await db.get(SQL.goalById, [idParam(req)]);
     if (!g || g.user_id !== req.user.id) fail(404, 'Goal not found');
     return g;
   }
 
-  function ownTask(req) {
-    const t = q.taskById.get(idParam(req));
+  async function ownTask(req) {
+    const t = await db.get(SQL.taskById, [idParam(req)]);
     if (!t || t.user_id !== req.user.id) fail(404, 'Task not found');
     return t;
   }
 
-  function goalsFor(user, scope) {
+  async function goalsFor(user, scope) {
     const today = userToday(user);
     const args = [user.id, weekStart(today), monthStart(today)];
-    const rows = scope === 'past' ? q.pastGoals.all(...args) : q.currentGoals.all(...args);
+    const rows = await db.all(scope === 'past' ? SQL.pastGoals : SQL.currentGoals, args);
     return rows.map(goalOut);
   }
 
-  function tasksFor(user, dayParam) {
+  async function tasksFor(user, dayParam) {
     const today = userToday(user);
     const day = dayParam === undefined ? today : dayParam;
     if (!isValidDay(day)) fail(400, 'day must be a date in YYYY-MM-DD format');
-    return { day, today, tasks: q.tasksForDay.all(user.id, day).map(taskOut) };
+    return { day, today, tasks: (await db.all(SQL.tasksForDay, [user.id, day])).map(taskOut) };
   }
 
   // ---------- middleware ----------
@@ -328,6 +303,10 @@ export function createApp(db, { secureCookies = false, now = () => new Date() } 
     next();
   });
   app.use(express.static(PUBLIC_DIR));
+
+  // For hosting platforms' health checks.
+  app.get('/api/health', (req, res) => res.json({ ok: true }));
+
   app.use('/api', express.json({ limit: '32kb' }));
 
   // Requiring a JSON body on every state-changing request means a cross-site
@@ -339,10 +318,10 @@ export function createApp(db, { secureCookies = false, now = () => new Date() } 
     next();
   });
 
-  app.use('/api', (req, res, next) => {
+  app.use('/api', async (req, res, next) => {
     const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     req.sessionTokenHash = token ? hashToken(token) : null;
-    req.user = token ? (q.sessionUser.get(req.sessionTokenHash, nowIso()) ?? null) : null;
+    req.user = token ? ((await db.get(SQL.sessionUser, [req.sessionTokenHash, nowIso()])) ?? null) : null;
     next();
   });
 
@@ -351,11 +330,11 @@ export function createApp(db, { secureCookies = false, now = () => new Date() } 
     next();
   };
 
-  function startSession(res, userId) {
-    q.purgeSessions.run(nowIso());
+  async function startSession(res, userId) {
+    await db.run(SQL.purgeSessions, [nowIso()]);
     const token = newSessionToken();
     const expires = new Date(now().getTime() + SESSION_TTL_DAYS * DAY_MS);
-    q.insertSession.run(hashToken(token), userId, expires.toISOString());
+    await db.run(SQL.insertSession, [hashToken(token), userId, expires.toISOString()]);
     res.cookie(SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: 'lax',
@@ -379,38 +358,38 @@ export function createApp(db, { secureCookies = false, now = () => new Date() } 
     const displayName = text(req.body, 'displayName', { max: 60 }) || username;
     const timezone = text(req.body, 'timezone', { max: 64 }) || 'UTC';
     if (!isValidTimezone(timezone)) fail(400, 'timezone is not a recognised IANA timezone');
-    if (q.userByName.get(username)) fail(409, 'That username is taken');
+    if (await db.get(SQL.userByName, [username])) fail(409, 'That username is taken');
 
     const hash = await hashPassword(password);
     let id;
     try {
-      id = Number(q.insertUser.run(username, displayName, hash, timezone).lastInsertRowid);
+      id = await insertId(SQL.insertUser, [username, displayName, hash, timezone, nowIso()]);
     } catch (err) {
       // Lost a race with a concurrent signup for the same name.
-      if (String(err.message).includes('UNIQUE')) fail(409, 'That username is taken');
+      if (isUniqueViolation(err)) fail(409, 'That username is taken');
       throw err;
     }
-    startSession(res, id);
-    res.status(201).json({ user: publicUser(q.userById.get(id)) });
+    await startSession(res, id);
+    res.status(201).json({ user: publicUser(await db.get(SQL.userById, [id])) });
   });
 
   app.post('/api/auth/login', async (req, res) => {
     const username = text(req.body, 'username', { required: true, max: 30 });
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
     if (limiter.isBlocked(req.ip, username)) fail(429, 'Too many failed attempts. Try again later.');
-    const user = q.userByName.get(username);
+    const user = await db.get(SQL.userByName, [username]);
     const ok = user ? await verifyPassword(password, user.password_hash) : false;
     if (!ok) {
       limiter.fail(req.ip, username);
       fail(401, 'Wrong username or password');
     }
     limiter.reset(req.ip, username);
-    startSession(res, user.id);
+    await startSession(res, user.id);
     res.json({ user: publicUser(user) });
   });
 
-  app.post('/api/auth/logout', (req, res) => {
-    if (req.sessionTokenHash) q.deleteSession.run(req.sessionTokenHash);
+  app.post('/api/auth/logout', async (req, res) => {
+    if (req.sessionTokenHash) await db.run(SQL.deleteSession, [req.sessionTokenHash]);
     res.clearCookie(SESSION_COOKIE, { path: '/' });
     res.json({ ok: true });
   });
@@ -419,126 +398,130 @@ export function createApp(db, { secureCookies = false, now = () => new Date() } 
     res.json({ user: publicUser(req.user), today: userToday(req.user) });
   });
 
-  app.patch('/api/me', requireUser, (req, res) => {
+  app.patch('/api/me', requireUser, async (req, res) => {
     const displayName = text(req.body, 'displayName', { max: 60 }) || req.user.display_name;
     const timezone = text(req.body, 'timezone', { max: 64 }) || req.user.timezone;
     if (!isValidTimezone(timezone)) fail(400, 'timezone is not a recognised IANA timezone');
-    q.updateUser.run(displayName, timezone, req.user.id);
-    const user = q.userById.get(req.user.id);
+    await db.run(SQL.updateUser, [displayName, timezone, req.user.id]);
+    const user = await db.get(SQL.userById, [req.user.id]);
     res.json({ user: publicUser(user), today: userToday(user) });
   });
 
   // ---------- partnerships ----------
 
-  app.get('/api/partnerships', requireUser, (req, res) => {
-    const rows = q.partnershipsForUser.all(req.user.id, req.user.id);
-    res.json({ partnerships: rows.map((p) => partnershipOut(p, req.user)) });
+  app.get('/api/partnerships', requireUser, async (req, res) => {
+    const rows = await db.all(SQL.partnershipsForUser, [req.user.id, req.user.id]);
+    const partnerships = [];
+    for (const p of rows) partnerships.push(await partnershipOut(p, req.user));
+    res.json({ partnerships });
   });
 
-  app.post('/api/partnerships', requireUser, (req, res) => {
+  app.post('/api/partnerships', requireUser, async (req, res) => {
     const username = text(req.body, 'username', { required: true, max: 30 });
-    const other = q.userByName.get(username);
+    const other = await db.get(SQL.userByName, [username]);
     if (!other) fail(404, `No user called "${username}"`);
     if (other.id === req.user.id) fail(400, "You can't partner with yourself");
 
-    const existing = q.openPartnershipBetween.get(req.user.id, other.id, other.id, req.user.id);
+    const existing = await db.get(SQL.openPartnershipBetween, [req.user.id, other.id, other.id, req.user.id]);
     if (existing) {
       // They already asked us: treat our request as accepting theirs.
       if (existing.status === 'pending' && existing.addressee_id === req.user.id) {
-        q.acceptPartnership.run(nowIso(), existing.id);
-        return res.json({ partnership: partnershipOut(q.partnershipById.get(existing.id), req.user) });
+        await db.run(SQL.acceptPartnership, [nowIso(), existing.id]);
+        return res.json({ partnership: await partnershipById(existing.id, req.user) });
       }
       fail(409, existing.status === 'active' ? "You're already partners" : 'Request already sent');
     }
-    const id = q.insertPartnership.run(req.user.id, other.id).lastInsertRowid;
-    res.status(201).json({ partnership: partnershipOut(q.partnershipById.get(id), req.user) });
+    const id = await insertId(SQL.insertPartnership, [req.user.id, other.id, nowIso()]);
+    res.status(201).json({ partnership: await partnershipById(id, req.user) });
   });
 
-  app.post('/api/partnerships/:id/accept', requireUser, (req, res) => {
-    const { p } = loadPartnership(req, { active: false });
+  app.post('/api/partnerships/:id/accept', requireUser, async (req, res) => {
+    const { p } = await loadPartnership(req, { active: false });
     if (p.status !== 'pending' || p.addressee_id !== req.user.id) fail(409, 'Nothing to accept');
-    q.acceptPartnership.run(nowIso(), p.id);
-    res.json({ partnership: partnershipOut(q.partnershipById.get(p.id), req.user) });
+    await db.run(SQL.acceptPartnership, [nowIso(), p.id]);
+    res.json({ partnership: await partnershipById(p.id, req.user) });
   });
 
   // Cancels an outgoing request, declines an incoming one, or ends an active partnership.
-  app.delete('/api/partnerships/:id', requireUser, (req, res) => {
-    const { p } = loadPartnership(req, { active: false });
-    if (p.status === 'pending' && p.requester_id === req.user.id) q.deletePartnership.run(p.id);
-    else if (p.status === 'pending') q.setPartnershipStatus.run('declined', p.id);
-    else if (p.status === 'active') q.setPartnershipStatus.run('ended', p.id);
+  app.delete('/api/partnerships/:id', requireUser, async (req, res) => {
+    const { p } = await loadPartnership(req, { active: false });
+    if (p.status === 'pending' && p.requester_id === req.user.id) await db.run(SQL.deletePartnership, [p.id]);
+    else if (p.status === 'pending') await db.run(SQL.setPartnershipStatus, ['declined', p.id]);
+    else if (p.status === 'active') await db.run(SQL.setPartnershipStatus, ['ended', p.id]);
     else fail(409, 'This partnership is already closed');
     res.json({ ok: true });
   });
 
-  app.patch('/api/partnerships/:id', requireUser, (req, res) => {
-    const { p } = loadPartnership(req);
+  app.patch('/api/partnerships/:id', requireUser, async (req, res) => {
+    const { p } = await loadPartnership(req);
     const days = int(req.body?.checkinIntervalDays, 'checkinIntervalDays', 1, 30);
-    q.setInterval.run(days, p.id);
-    res.json({ partnership: partnershipOut(q.partnershipById.get(p.id), req.user) });
+    await db.run(SQL.setInterval, [days, p.id]);
+    res.json({ partnership: await partnershipById(p.id, req.user) });
   });
 
-  app.get('/api/partnerships/:id', requireUser, (req, res) => {
-    const { p } = loadPartnership(req, { active: false });
-    res.json({ partnership: partnershipOut(p, req.user) });
+  app.get('/api/partnerships/:id', requireUser, async (req, res) => {
+    const { p } = await loadPartnership(req, { active: false });
+    res.json({ partnership: await partnershipOut(p, req.user) });
   });
 
   // A partner's goals and daily plan are visible only while the partnership is active.
-  app.get('/api/partnerships/:id/goals', requireUser, (req, res) => {
-    const { partner } = loadPartnership(req);
+  app.get('/api/partnerships/:id/goals', requireUser, async (req, res) => {
+    const { partner } = await loadPartnership(req);
     const scope = req.query.scope === 'past' ? 'past' : 'current';
-    res.json({ goals: goalsFor(partner, scope) });
+    res.json({ goals: await goalsFor(partner, scope) });
   });
 
-  app.get('/api/partnerships/:id/tasks', requireUser, (req, res) => {
-    const { partner } = loadPartnership(req);
-    res.json(tasksFor(partner, req.query.day));
+  app.get('/api/partnerships/:id/tasks', requireUser, async (req, res) => {
+    const { partner } = await loadPartnership(req);
+    res.json(await tasksFor(partner, req.query.day));
   });
 
   // ---------- check-ins ----------
 
-  app.get('/api/partnerships/:id/checkins', requireUser, (req, res) => {
-    const { p } = loadPartnership(req);
+  app.get('/api/partnerships/:id/checkins', requireUser, async (req, res) => {
+    const { p } = await loadPartnership(req);
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 30, 1), 100);
-    res.json({ checkins: q.checkins.all(p.id, limit).map(checkinOut) });
+    res.json({ checkins: (await db.all(SQL.checkins, [p.id, limit])).map(checkinOut) });
   });
 
-  app.post('/api/partnerships/:id/checkins', requireUser, (req, res) => {
-    const { p } = loadPartnership(req);
+  app.post('/api/partnerships/:id/checkins', requireUser, async (req, res) => {
+    const { p } = await loadPartnership(req);
     const mood = int(req.body?.mood, 'mood', 1, 5);
     const wins = text(req.body, 'wins', { max: 2000 });
     const struggles = text(req.body, 'struggles', { max: 2000 });
     const nextFocus = text(req.body, 'nextFocus', { max: 2000 });
     if (!wins && !struggles && !nextFocus) fail(400, 'Write at least a line about how it went');
-    const id = q.insertCheckin.run(p.id, req.user.id, mood, wins, struggles, nextFocus, nowIso())
-      .lastInsertRowid;
-    res.status(201).json({ checkin: checkinOut(q.checkinById.get(id)) });
+    const id = await insertId(SQL.insertCheckin, [p.id, req.user.id, mood, wins, struggles, nextFocus, nowIso()]);
+    res.status(201).json({ checkin: checkinOut(await db.get(SQL.checkinById, [id])) });
   });
 
   // ---------- messages ----------
 
-  app.get('/api/partnerships/:id/messages', requireUser, (req, res) => {
-    const { p } = loadPartnership(req);
+  app.get('/api/partnerships/:id/messages', requireUser, async (req, res) => {
+    const { p } = await loadPartnership(req);
     const after = Number.parseInt(req.query.after, 10);
-    const rows = Number.isInteger(after) && after >= 0 ? q.messagesAfter.all(p.id, after) : q.latestMessages.all(p.id);
+    const rows =
+      Number.isInteger(after) && after >= 0
+        ? await db.all(SQL.messagesAfter, [p.id, after])
+        : await db.all(SQL.latestMessages, [p.id]);
     res.json({ messages: rows.map(messageOut) });
   });
 
-  app.post('/api/partnerships/:id/messages', requireUser, (req, res) => {
-    const { p } = loadPartnership(req);
+  app.post('/api/partnerships/:id/messages', requireUser, async (req, res) => {
+    const { p } = await loadPartnership(req);
     const body = text(req.body, 'body', { required: true, max: 2000 });
-    const id = q.insertMessage.run(p.id, req.user.id, body, nowIso()).lastInsertRowid;
-    res.status(201).json({ message: messageOut(q.messageById.get(id)) });
+    const id = await insertId(SQL.insertMessage, [p.id, req.user.id, body, nowIso()]);
+    res.status(201).json({ message: messageOut(await db.get(SQL.messageById, [id])) });
   });
 
   // ---------- goals ----------
 
-  app.get('/api/goals', requireUser, (req, res) => {
+  app.get('/api/goals', requireUser, async (req, res) => {
     const scope = req.query.scope === 'past' ? 'past' : 'current';
-    res.json({ goals: goalsFor(req.user, scope) });
+    res.json({ goals: await goalsFor(req.user, scope) });
   });
 
-  app.post('/api/goals', requireUser, (req, res) => {
+  app.post('/api/goals', requireUser, async (req, res) => {
     const title = text(req.body, 'title', { required: true, max: 200 });
     const details = text(req.body, 'details', { max: 2000 });
     const horizon = oneOf(req.body?.horizon, 'horizon', ['week', 'month']);
@@ -546,49 +529,50 @@ export function createApp(db, { secureCookies = false, now = () => new Date() } 
     const today = userToday(req.user);
     let start = periodStart(horizon, today);
     if (when === 'next') start = horizon === 'week' ? addDays(start, 7) : addMonths(start, 1);
-    const id = q.insertGoal.run(req.user.id, title, details, horizon, start).lastInsertRowid;
-    res.status(201).json({ goal: goalOut(q.goalById.get(id)) });
+    const stamp = nowIso();
+    const id = await insertId(SQL.insertGoal, [req.user.id, title, details, horizon, start, stamp, stamp]);
+    res.status(201).json({ goal: goalOut(await db.get(SQL.goalById, [id])) });
   });
 
-  app.patch('/api/goals/:id', requireUser, (req, res) => {
-    const g = ownGoal(req);
+  app.patch('/api/goals/:id', requireUser, async (req, res) => {
+    const g = await ownGoal(req);
     const b = req.body ?? {};
     const title = b.title === undefined ? g.title : text(b, 'title', { required: true, max: 200 });
     const details = b.details === undefined ? g.details : text(b, 'details', { max: 2000 });
     const status = b.status === undefined ? g.status : oneOf(b.status, 'status', ['active', 'done', 'dropped']);
     let progress = b.progress === undefined ? g.progress : int(b.progress, 'progress', 0, 100);
     if (b.status === 'done' && b.progress === undefined) progress = 100;
-    q.updateGoal.run(title, details, status, progress, g.id);
-    res.json({ goal: goalOut(q.goalById.get(g.id)) });
+    await db.run(SQL.updateGoal, [title, details, status, progress, nowIso(), g.id]);
+    res.json({ goal: goalOut(await db.get(SQL.goalById, [g.id])) });
   });
 
-  app.delete('/api/goals/:id', requireUser, (req, res) => {
-    q.deleteGoal.run(ownGoal(req).id);
+  app.delete('/api/goals/:id', requireUser, async (req, res) => {
+    await db.run(SQL.deleteGoal, [(await ownGoal(req)).id]);
     res.json({ ok: true });
   });
 
   // ---------- daily tasks & decisions ----------
 
-  app.get('/api/tasks', requireUser, (req, res) => {
-    res.json(tasksFor(req.user, req.query.day));
+  app.get('/api/tasks', requireUser, async (req, res) => {
+    res.json(await tasksFor(req.user, req.query.day));
   });
 
-  app.post('/api/tasks', requireUser, (req, res) => {
+  app.post('/api/tasks', requireUser, async (req, res) => {
     const title = text(req.body, 'title', { required: true, max: 300 });
     const kind = oneOf(req.body?.kind ?? 'task', 'kind', ['task', 'decision']);
     const day = req.body?.day ?? userToday(req.user);
     if (!isValidDay(day)) fail(400, 'day must be a date in YYYY-MM-DD format');
-    let goalId = req.body?.goalId ?? null;
+    const goalId = req.body?.goalId ?? null;
     if (goalId !== null) {
-      const g = Number.isInteger(goalId) ? q.goalById.get(goalId) : null;
+      const g = Number.isInteger(goalId) ? await db.get(SQL.goalById, [goalId]) : null;
       if (!g || g.user_id !== req.user.id) fail(400, 'goalId is not one of your goals');
     }
-    const id = q.insertTask.run(req.user.id, day, title, kind, goalId).lastInsertRowid;
-    res.status(201).json({ task: taskOut(q.taskById.get(id)) });
+    const id = await insertId(SQL.insertTask, [req.user.id, day, title, kind, goalId, nowIso()]);
+    res.status(201).json({ task: taskOut(await db.get(SQL.taskById, [id])) });
   });
 
-  app.patch('/api/tasks/:id', requireUser, (req, res) => {
-    const t = ownTask(req);
+  app.patch('/api/tasks/:id', requireUser, async (req, res) => {
+    const t = await ownTask(req);
     const b = req.body ?? {};
     const title = b.title === undefined ? t.title : text(b, 'title', { required: true, max: 300 });
     let done = t.done;
@@ -598,31 +582,31 @@ export function createApp(db, { secureCookies = false, now = () => new Date() } 
       done = b.done ? 1 : 0;
       doneAt = b.done ? (t.done ? t.done_at : nowIso()) : null;
     }
-    q.updateTask.run(title, done, doneAt, t.id);
-    res.json({ task: taskOut(q.taskById.get(t.id)) });
+    await db.run(SQL.updateTask, [title, done, doneAt, t.id]);
+    res.json({ task: taskOut(await db.get(SQL.taskById, [t.id])) });
   });
 
-  app.delete('/api/tasks/:id', requireUser, (req, res) => {
-    q.deleteTask.run(ownTask(req).id);
+  app.delete('/api/tasks/:id', requireUser, async (req, res) => {
+    await db.run(SQL.deleteTask, [(await ownTask(req)).id]);
     res.json({ ok: true });
   });
 
   // Copies unfinished items from the most recent earlier day onto today, so
   // yesterday's record still shows what was missed.
-  app.post('/api/tasks/carry-over', requireUser, (req, res) => {
+  app.post('/api/tasks/carry-over', requireUser, async (req, res) => {
     const today = userToday(req.user);
-    const from = q.lastDayWithOpenTasks.get(req.user.id, today)?.day;
-    if (!from) return res.json({ from: null, copied: 0, ...tasksFor(req.user) });
-    const copied = transaction(db, () => {
-      let n = 0;
-      for (const t of q.openTasksForDay.all(req.user.id, from)) {
-        if (q.taskExists.get(req.user.id, today, t.title)) continue;
-        q.insertTask.run(req.user.id, today, t.title, t.kind, t.goal_id);
-        n += 1;
+    const result = await db.transaction(async (tx) => {
+      const from = (await tx.get(SQL.lastDayWithOpenTasks, [req.user.id, today]))?.day ?? null;
+      let copied = 0;
+      if (!from) return { from, copied };
+      for (const t of await tx.all(SQL.openTasksForDay, [req.user.id, from])) {
+        if (await tx.get(SQL.taskExists, [req.user.id, today, t.title])) continue;
+        await tx.get(SQL.insertTask, [req.user.id, today, t.title, t.kind, t.goal_id, nowIso()]);
+        copied += 1;
       }
-      return n;
+      return { from, copied };
     });
-    res.json({ from, copied, ...tasksFor(req.user) });
+    res.json({ ...result, ...(await tasksFor(req.user)) });
   });
 
   // ---------- errors ----------

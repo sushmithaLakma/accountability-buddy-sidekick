@@ -8,15 +8,31 @@ let base;
 // Mutable clock so check-in due dates can be tested.
 let clock = new Date('2026-10-06T09:00:00Z');
 
+// Runs against in-memory SQLite by default. Set TEST_DATABASE_URL to run the
+// same suite against Postgres (its tables are dropped first!).
+const pgUrl = process.env.TEST_DATABASE_URL;
+let db;
+
 before(async () => {
-  const app = createApp(openDatabase(':memory:'), { now: () => clock });
+  if (pgUrl) {
+    const { default: pg } = await import('pg');
+    const client = new pg.Client({ connectionString: pgUrl });
+    await client.connect();
+    await client.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+    await client.end();
+  }
+  db = await openDatabase({ url: pgUrl });
+  const app = createApp(db, { now: () => clock });
   await new Promise((resolve) => {
     server = app.listen(0, resolve);
   });
   base = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => server.close());
+after(async () => {
+  server.close();
+  await db.close();
+});
 
 /** Minimal cookie-keeping client, one per simulated user. */
 function client() {

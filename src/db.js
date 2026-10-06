@@ -1,36 +1,40 @@
-import { DatabaseSync } from 'node:sqlite';
+// Database access with two interchangeable backends behind one small async API:
+//
+//   db.get(sql, params)   -> first row or undefined
+//   db.all(sql, params)   -> array of rows
+//   db.run(sql, params)   -> undefined
+//   db.transaction(async (tx) => { ... })  // tx has the same get/all/run
+//
+// SQL is written once with `?` placeholders in the subset both engines share.
+// - Postgres (when DATABASE_URL is set): used for hosted deployments, e.g. a free Neon database.
+// - SQLite via Node's built-in node:sqlite: zero-setup local development and tests.
+
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-const SCHEMA = `
+const SQLITE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  username      TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+  username      TEXT    NOT NULL,
   display_name  TEXT    NOT NULL,
   password_hash TEXT    NOT NULL,
   timezone      TEXT    NOT NULL DEFAULT 'UTC',
-  created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  created_at    TEXT    NOT NULL
 );
-
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT    PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   expires_at TEXT    NOT NULL
 );
-
--- A partnership links two users. status: pending | active | declined | ended
 CREATE TABLE IF NOT EXISTS partnerships (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
   requester_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   addressee_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   status                TEXT    NOT NULL DEFAULT 'pending',
   checkin_interval_days INTEGER NOT NULL DEFAULT 1,
-  created_at            TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  created_at            TEXT    NOT NULL,
   accepted_at           TEXT
 );
-
--- horizon: week | month. period_start is the Monday / 1st of month (YYYY-MM-DD).
--- status: active | done | dropped
 CREATE TABLE IF NOT EXISTS goals (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -40,13 +44,9 @@ CREATE TABLE IF NOT EXISTS goals (
   period_start TEXT    NOT NULL,
   status       TEXT    NOT NULL DEFAULT 'active',
   progress     INTEGER NOT NULL DEFAULT 0,
-  created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  updated_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  created_at   TEXT    NOT NULL,
+  updated_at   TEXT    NOT NULL
 );
-CREATE INDEX IF NOT EXISTS goals_user_period ON goals(user_id, period_start);
-
--- Daily to-dos and decisions. day is a calendar date in the owner's timezone.
--- kind: task | decision
 CREATE TABLE IF NOT EXISTS tasks (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -55,12 +55,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   kind       TEXT    NOT NULL DEFAULT 'task',
   goal_id    INTEGER REFERENCES goals(id) ON DELETE SET NULL,
   done       INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  created_at TEXT    NOT NULL,
   done_at    TEXT
 );
-CREATE INDEX IF NOT EXISTS tasks_user_day ON tasks(user_id, day);
-
--- A check-in is a short reflection one partner posts for the other to see.
 CREATE TABLE IF NOT EXISTS checkins (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   partnership_id INTEGER NOT NULL REFERENCES partnerships(id) ON DELETE CASCADE,
@@ -69,38 +66,135 @@ CREATE TABLE IF NOT EXISTS checkins (
   wins           TEXT    NOT NULL DEFAULT '',
   struggles      TEXT    NOT NULL DEFAULT '',
   next_focus     TEXT    NOT NULL DEFAULT '',
-  created_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  created_at     TEXT    NOT NULL
 );
-CREATE INDEX IF NOT EXISTS checkins_partnership ON checkins(partnership_id, created_at);
-
 CREATE TABLE IF NOT EXISTS messages (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   partnership_id INTEGER NOT NULL REFERENCES partnerships(id) ON DELETE CASCADE,
   user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   body           TEXT    NOT NULL,
-  created_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  created_at     TEXT    NOT NULL
 );
-CREATE INDEX IF NOT EXISTS messages_partnership ON messages(partnership_id, id);
 `;
 
-export function openDatabase(file = ':memory:') {
-  if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
-  db.exec('PRAGMA foreign_keys = ON;');
-  if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
-  db.exec(SCHEMA);
-  return db;
+// Same tables for Postgres. Timestamps stay ISO-8601 text so both engines
+// compare and return them identically.
+const POSTGRES_SCHEMA = SQLITE_SCHEMA.replaceAll(
+  'INTEGER PRIMARY KEY AUTOINCREMENT',
+  'INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY',
+);
+
+const INDEXES = `
+CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users (lower(username));
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
+CREATE INDEX IF NOT EXISTS partnerships_requester ON partnerships (requester_id);
+CREATE INDEX IF NOT EXISTS partnerships_addressee ON partnerships (addressee_id);
+CREATE INDEX IF NOT EXISTS goals_user_period ON goals (user_id, period_start);
+CREATE INDEX IF NOT EXISTS tasks_user_day ON tasks (user_id, day);
+CREATE INDEX IF NOT EXISTS checkins_partnership ON checkins (partnership_id, created_at);
+CREATE INDEX IF NOT EXISTS messages_partnership ON messages (partnership_id, id);
+`;
+
+export async function openDatabase({ url, file } = {}) {
+  return url ? openPostgres(url) : openSqlite(file ?? ':memory:');
 }
 
-/** Runs fn inside a transaction, rolling back if it throws. */
-export function transaction(db, fn) {
-  db.exec('BEGIN');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
+// ---------- SQLite ----------
+
+async function openSqlite(file) {
+  // Imported lazily so Postgres deployments don't need node:sqlite at all.
+  const { DatabaseSync } = await import('node:sqlite');
+  if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
+  const raw = new DatabaseSync(file);
+  raw.exec('PRAGMA foreign_keys = ON;');
+  if (file !== ':memory:') raw.exec('PRAGMA journal_mode = WAL;');
+  raw.exec(SQLITE_SCHEMA + INDEXES);
+
+  const cache = new Map();
+  const stmt = (sql) => {
+    let s = cache.get(sql);
+    if (!s) cache.set(sql, (s = raw.prepare(sql)));
+    return s;
+  };
+  const api = {
+    kind: 'sqlite',
+    get: async (sql, params = []) => stmt(sql).get(...params),
+    all: async (sql, params = []) => stmt(sql).all(...params),
+    run: async (sql, params = []) => {
+      stmt(sql).run(...params);
+    },
+    close: async () => raw.close(),
+  };
+  // node:sqlite is synchronous, but callers await between statements, so
+  // serialize transactions to keep other requests' writes out of them.
+  let queue = Promise.resolve();
+  api.transaction = (fn) => {
+    const result = queue.then(async () => {
+      raw.exec('BEGIN');
+      try {
+        const value = await fn(api);
+        raw.exec('COMMIT');
+        return value;
+      } catch (err) {
+        raw.exec('ROLLBACK');
+        throw err;
+      }
+    });
+    queue = result.catch(() => {});
     return result;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
+  };
+  return api;
+}
+
+// ---------- Postgres ----------
+
+/** Converts `?` placeholders to `$1, $2, …` (our SQL never has `?` inside string literals). */
+function toPg(sql) {
+  let i = 0;
+  return sql.replace(/\?/g, () => `$${++i}`);
+}
+
+async function openPostgres(url) {
+  const { default: pg } = await import('pg');
+  const pool = new pg.Pool({ connectionString: url, max: 5 });
+  // Hosted databases (e.g. Neon) can drop idle connections; don't crash on it.
+  pool.on('error', (err) => console.error('Postgres pool error:', err.message));
+
+  const wrap = (client) => ({
+    get: async (sql, params = []) => (await client.query(toPg(sql), params)).rows[0],
+    all: async (sql, params = []) => (await client.query(toPg(sql), params)).rows,
+    run: async (sql, params = []) => {
+      await client.query(toPg(sql), params);
+    },
+  });
+
+  // Several instances could start at once; the advisory lock keeps schema setup single-file.
+  const setup = await pool.connect();
+  try {
+    await setup.query('SELECT pg_advisory_lock(727274)');
+    await setup.query(POSTGRES_SCHEMA + INDEXES);
+  } finally {
+    await setup.query('SELECT pg_advisory_unlock(727274)').catch(() => {});
+    setup.release();
   }
+
+  return {
+    kind: 'postgres',
+    ...wrap(pool),
+    async transaction(fn) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const value = await fn(wrap(client));
+        await client.query('COMMIT');
+        return value;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+    close: () => pool.end(),
+  };
 }
