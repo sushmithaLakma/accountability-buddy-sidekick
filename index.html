@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Accountability Buddy</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Accountability Buddy</h1>
+      <p class="tagline">Break the day into small steps. Start one.</p>
+    </div>
+    <nav class="day-nav" aria-label="Choose day">
+      <button type="button" id="prev-day" class="icon-btn" aria-label="Previous day">&larr;</button>
+      <button type="button" id="today-btn" class="day-label"></button>
+      <button type="button" id="next-day" class="icon-btn" aria-label="Next day">&rarr;</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="summary" id="summary" aria-label="Day summary"></section>
+
+    <section class="next-up" id="next-up" aria-live="polite"></section>
+
+    <section class="card add-goal">
+      <h2>What do you want to get done?</h2>
+      <form id="goal-form" autocomplete="off">
+        <label class="field">
+          <span>Goal</span>
+          <input id="goal-title" type="text" placeholder="e.g. Finish the project report" required maxlength="140">
+        </label>
+        <label class="field">
+          <span>Smaller steps <small>(one per line, optional minutes like “Outline sections | 15”)</small></span>
+          <textarea id="goal-steps" rows="4" placeholder="Open the doc and reread notes | 5&#10;Outline the sections | 15&#10;Write the intro | 25"></textarea>
+        </label>
+        <div class="form-actions">
+          <button type="submit" class="btn primary">Add goal</button>
+          <button type="button" id="carry-over" class="btn ghost" hidden>Bring unfinished from previous day</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="goals" class="goals" aria-label="Goals"></section>
+  </main>
+
+  <footer class="foot">
+    <p>Everything is saved in this browser only.
+      <button type="button" id="export-btn" class="link-btn">Export</button> ·
+      <label class="link-btn">Import<input id="import-input" type="file" accept="application/json" hidden></label>
+    </p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
