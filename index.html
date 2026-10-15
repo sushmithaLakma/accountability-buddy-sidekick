@@ -1,0 +1,509 @@
+<title>Accountability Buddy</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Hanken+Grotesk:wght@300;400;500;700&display=swap">
+<style>
+/* Layout: one phone-width column; three screens (Home, Goals, Steps) swap in place. Sidekick design system tokens. */
+:root {
+  --ground: #f7f7f5; --card: #ececea; --tile: #dcdcd8;
+  --ink: #121211; --muted: #63635e; --card-ink: #121211; --card-muted: #5a5a56;
+  --line: #d6d6d2; --chip: #e6e6e3; --chip-active: #121211; --on-chip-active: #ffffff;
+  --meter-start: #f3e2ad; --meter-end: #a8c2f2; --meter-track: #dbe4f5; --gauge-warm: #f2994a;
+  --focus: var(--ink);
+  --font-sans: "Hanken Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, Menlo, monospace;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px; --space-7: 48px;
+  --radius-md: 24px; --radius-lg: 36px; --radius-pill: 999px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0d0d0c; --ink: #f2f2ef; --muted: #9b9b96; --line: #4a4a47;
+    --chip: #1c1c1b; --chip-active: #f2f2ef; --on-chip-active: #121211; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0d0d0c; --ink: #f2f2ef; --muted: #9b9b96; --line: #4a4a47;
+  --chip: #1c1c1b; --chip-active: #f2f2ef; --on-chip-active: #121211; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: var(--font-sans); font-size: 15px; line-height: 1.45;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 var(--space-6);
+}
+.app { max-width: 440px; margin: 0 auto; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.sk-card :focus-visible, .sk-sheet :focus-visible { outline-color: var(--card-ink); }
+.sk-label { font-family: var(--font-mono); font-size: 11px; line-height: 1.35; letter-spacing: .12em; text-transform: uppercase; }
+.stack { display: flex; flex-direction: column; gap: var(--space-3); }
+.sk-section { text-align: center; color: var(--muted); font-size: 13px; padding-top: var(--space-3); }
+.empty { text-align: center; color: var(--muted); padding: var(--space-6) var(--space-4); }
+.note { text-align: center; color: var(--muted); font-size: 13px; margin-top: var(--space-6); }
+
+/* TopBar */
+.sk-topbar { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: var(--space-2); padding-top: var(--space-3); }
+.sk-topbar h1 { margin: 0; text-align: center; font-size: 24px; line-height: 1.2; font-weight: 500; letter-spacing: -.02em; }
+.sk-icon { width: 44px; height: 44px; display: inline-grid; place-items: center; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--ink); cursor: pointer; }
+.sk-icon:hover { background: var(--chip); }
+.sk-icon.is-confirm { width: auto; padding: 0 var(--space-3); background: var(--chip-active); color: var(--on-chip-active); font-size: 13px; }
+.sk-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-4) 0; }
+
+/* Chip */
+.sk-chip { font-size: 15px; height: 36px; padding: 0 var(--space-4); border-radius: var(--radius-pill); border: 1px solid transparent; background: var(--chip); color: var(--ink); cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-2); }
+.sk-chip[aria-pressed="true"] { background: var(--chip-active); color: var(--on-chip-active); }
+.sk-chip .sk-count { font-family: var(--font-mono); font-size: 11px; opacity: .75; }
+
+/* Buttons */
+.btn { height: 40px; padding: 0 var(--space-4); border-radius: var(--radius-pill); border: 0; cursor: pointer; font-weight: 500; white-space: nowrap; }
+.btn-primary { background: var(--card-ink); color: var(--card); }
+.btn-quiet { background: var(--tile); color: var(--card-ink); }
+.btn-ground { background: var(--chip); color: var(--ink); width: 100%; height: 48px; }
+
+/* Cards */
+.sk-card { background: var(--card); color: var(--card-ink); border-radius: var(--radius-lg); }
+.sk-listcard { padding: var(--space-4) var(--space-5) var(--space-5); text-align: center; display: flex; flex-direction: column; gap: var(--space-1); cursor: pointer; border: 0; width: 100%; font: inherit; color: var(--card-ink); }
+.sk-listcard .sk-meta { display: flex; justify-content: space-between; color: var(--card-muted); font-size: 13px; }
+.sk-listcard .sk-meta span { display: inline-flex; align-items: center; gap: var(--space-1); }
+.sk-listcard h3 { margin: var(--space-3) 0 0; font-size: 30px; line-height: 1.05; font-weight: 700; letter-spacing: -.035em; text-wrap: balance; overflow-wrap: anywhere; }
+.sk-listcard p { margin: 0 0 var(--space-4); color: var(--card-muted); }
+
+.sk-taskcard { display: grid; grid-template-columns: 104px 1fr; gap: var(--space-4); padding: var(--space-3); min-height: 120px; }
+.sk-taskcard.is-flipped { grid-template-columns: 1fr 104px; }
+.sk-taskcard.is-flipped .sk-tile { order: 2; }
+.sk-tile { border-radius: var(--radius-md); background: var(--tile); color: var(--card-ink); display: flex; flex-direction: column; justify-content: flex-end; padding: var(--space-3); }
+.sk-tile b { font-size: 30px; line-height: 1; font-weight: 300; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.sk-tile .sk-label { color: var(--card-muted); }
+.sk-taskcard.is-active .sk-tile { background: var(--card-ink); color: var(--card); }
+.sk-taskcard.is-active .sk-tile .sk-label { color: var(--card); opacity: .75; }
+.sk-body { display: flex; flex-direction: column; justify-content: space-between; gap: var(--space-2); padding: var(--space-1); min-width: 0; }
+.sk-body h4 { margin: 0; font-size: 18px; line-height: 1.25; font-weight: 500; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.sk-body .from { color: var(--card-muted); font-size: 13px; }
+.sk-taskcard.is-done h4 { text-decoration: line-through; color: var(--card-muted); }
+.sk-taskcard.is-done .sk-tile b { color: var(--card-muted); }
+.top-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
+.sk-state { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; padding: 3px 10px; border-radius: var(--radius-pill); border: 1px solid var(--card-muted); color: var(--card-ink); }
+.sk-state.is-active { background: var(--card-ink); border-color: var(--card-ink); color: var(--card); }
+.sk-state.is-done { border-color: transparent; background: var(--tile); color: var(--card-muted); }
+.x { width: 32px; height: 32px; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--card-muted); cursor: pointer; font-size: 18px; line-height: 1; }
+.x:hover { background: var(--tile); }
+.x.is-confirm { width: auto; padding: 0 var(--space-3); background: var(--card-ink); color: var(--card); font-size: 13px; }
+.actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
+/* Home sheet */
+.sk-sheet { background: var(--card); color: var(--card-ink); border-radius: var(--radius-lg); padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-5); margin-top: var(--space-4); }
+.sk-sheet-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); }
+.sk-sub { font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--card-muted); margin-top: 2px; }
+.sk-clock { font-size: 76px; line-height: .95; font-weight: 300; letter-spacing: -.03em; margin: 0; font-variant-numeric: tabular-nums; }
+.sk-clock small { font-size: 22px; color: var(--card-muted); letter-spacing: 0; margin-left: var(--space-1); }
+.sk-stats { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5) var(--space-6); }
+.sk-stat { display: grid; grid-template-columns: 1fr auto; gap: var(--space-1) var(--space-3); align-items: end; min-width: 0; }
+.sk-stat .sk-label, .sk-stat .sk-v { grid-column: 1; }
+.sk-stat .sk-v { font-size: 22px; line-height: 1.2; letter-spacing: -.01em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.sk-gauge { grid-column: 2; grid-row: 1 / span 2; width: 4px; height: 40px; border-radius: var(--radius-pill); background: linear-gradient(180deg, var(--gauge-warm), var(--meter-end)); position: relative; }
+.sk-gauge::after { content: ""; position: absolute; left: -5px; width: 14px; height: 2px; background: var(--card-ink); top: var(--at, 50%); }
+.meter-block { display: flex; flex-direction: column; gap: var(--space-2); }
+.sk-meter { position: relative; height: 60px; border-radius: var(--radius-md); background: var(--meter-track); overflow: hidden; }
+.sk-meter-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--meter-start), var(--meter-end)); border-radius: var(--radius-md); }
+.sk-meter-v { position: absolute; left: var(--space-3); top: 50%; transform: translateY(-50%); font-size: 26px; letter-spacing: -.02em; color: var(--card-ink); font-variant-numeric: tabular-nums; }
+.sk-meter-v small { font-size: 11px; color: var(--card-muted); }
+.sk-meter.is-thin { height: 10px; }
+.sk-meter.is-thin .sk-meter-fill { border-radius: var(--radius-pill); }
+@media (prefers-reduced-motion: no-preference) { .sk-meter-fill { transition: width .4s ease; } }
+
+.headline { margin: var(--space-2) 0 var(--space-1); font-size: 28px; line-height: 1.1; font-weight: 400; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.subline { color: var(--muted); font-size: 13px; margin-bottom: var(--space-3); }
+.subline-meter { margin-bottom: var(--space-4); }
+
+/* Add forms */
+.add { padding: var(--space-3); display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.add input { height: 44px; border: 0; border-radius: var(--radius-pill); background: var(--ground); color: var(--ink); padding: 0 var(--space-4); min-width: 0; }
+.add .grow { flex: 1 1 160px; }
+.add .mins { width: 84px; flex: 0 0 auto; }
+.add input::placeholder { color: var(--muted); }
+.next-title { font-size: 13px; color: var(--muted); margin: var(--space-5) 0 var(--space-2); text-align: center; }
+</style>
+
+<div class="app" id="app"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var LOCAL_KEY = 'accountability-buddy:v2';
+  var THEME_KEY = 'accountability-buddy:theme';
+  var app = document.getElementById('app');
+
+  // ---------- state ----------
+  var state = { goals: [] };
+  var view = { screen: 'home', goalId: null, filter: 'all', confirm: null };
+  var cloud = null;          // { ref } once the account store is reachable
+  var cloudChecked = false;  // true once we know whether the account store works
+
+  function readLocal() {
+    try {
+      var raw = localStorage.getItem(LOCAL_KEY);
+      var parsed = raw && JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.goals)) return parsed;
+    } catch (e) {}
+    return null;
+  }
+  function writeLocal() {
+    try { localStorage.setItem(LOCAL_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+
+  var writing = false, pending = false, timer = null;
+  function scheduleCloud() {
+    if (!cloud) return;
+    clearTimeout(timer);
+    timer = setTimeout(flushCloud, 600);
+  }
+  function flushCloud() {
+    if (!cloud) return;
+    if (writing) { pending = true; return; }
+    writing = true;
+    cloud.ref.set({ json: JSON.stringify(state), savedAt: Date.now() })
+      .catch(function () { /* local copy still holds the change */ })
+      .then(function () {
+        writing = false;
+        if (pending) { pending = false; flushCloud(); }
+      });
+  }
+
+  function save() { writeLocal(); scheduleCloud(); render(); }
+
+  function connectCloud() {
+    if (!window.claude || typeof window.claude.use !== 'function') { cloudChecked = true; seedIfEmpty(); render(); return; }
+    Promise.all([window.claude.use('db'), window.claude.use('user')]).then(function (r) {
+      var db = r[0], user = r[1];
+      if (!db || !user) return null;
+      return user.id().then(function (id) {
+        if (!id) return null;
+        var ref = db.doc('data/users/' + id + '/planner');
+        return ref.get().then(function (snap) {
+          var data = snap.exists ? snap.data() : null;
+          var parsed = null;
+          try { parsed = data && JSON.parse(data.json); } catch (e) {}
+          cloud = { ref: ref };
+          if (parsed && Array.isArray(parsed.goals)) {
+            state = parsed;
+            writeLocal();
+          } else if (state.goals.length) {
+            flushCloud();
+          }
+        });
+      });
+    }).catch(function () { cloud = null; }).then(function () { cloudChecked = true; seedIfEmpty(); render(); });
+  }
+
+  // First run only: start today with the goals you named. Deleting them later never brings them back.
+  var STARTER = ['Work', 'Design', 'Chinese on Duolingo', '5k run'];
+  function seedIfEmpty() {
+    if (state.seeded || state.goals.length) return;
+    var now = Date.now();
+    state.goals = STARTER.map(function (t, i) {
+      return { id: uid(), title: t, date: todayKey(), createdAt: now + i, steps: [] };
+    });
+    state.seeded = true;
+    writeLocal();
+    scheduleCloud();
+  }
+
+  // ---------- helpers ----------
+  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; });
+  }
+  function todayKey() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function todaysGoals() {
+    var k = todayKey();
+    return state.goals.filter(function (g) { return g.date === k; });
+  }
+  function findGoal(id) { return state.goals.find(function (g) { return g.id === id; }); }
+  function goalStatus(g) {
+    if (!g.steps.length) return g.done ? 'done' : 'todo';
+    if (g.steps.every(function (s) { return s.status === 'done'; })) return 'done';
+    if (g.steps.some(function (s) { return s.status !== 'todo'; })) return 'active';
+    return 'todo';
+  }
+  function pct(g) {
+    if (!g.steps.length) return g.done ? 100 : 0;
+    return Math.round(100 * g.steps.filter(function (s) { return s.status === 'done'; }).length / g.steps.length);
+  }
+  function clockTime(ts) {
+    var d = new Date(ts), h = d.getHours(), m = String(d.getMinutes()).padStart(2, '0');
+    return ((h % 12) || 12) + ':' + m;
+  }
+  // The step to work on now: one already in progress, else the first not started.
+  function nextStep(goals) {
+    for (var i = 0; i < goals.length; i++) {
+      var a = goals[i].steps.find(function (s) { return s.status === 'active'; });
+      if (a) return { goal: goals[i], step: a };
+    }
+    for (var j = 0; j < goals.length; j++) {
+      var t = goals[j].steps.find(function (s) { return s.status === 'todo'; });
+      if (t) return { goal: goals[j], step: t };
+    }
+    return null;
+  }
+  var STATE_WORD = { todo: 'Not started', active: 'In progress', done: 'Done' };
+
+  // ---------- icons ----------
+  var ICON = {
+    back: '<svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 11H3M9 5l-6 6 6 6"/></svg>',
+    sun: '<svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="4"/><path d="M11 1.5v2.5M11 18v2.5M1.5 11H4M18 11h2.5M4.3 4.3l1.8 1.8M15.9 15.9l1.8 1.8M4.3 17.7l1.8-1.8M15.9 6.1l1.8-1.8"/></svg>',
+    trash: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5.5h13M8 5.5V3.5h4v2M5 5.5l.8 11h8.4l.8-11"/></svg>',
+    clock: '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="7" cy="7" r="5.5"/><path d="M7 4v3l2 1.5"/></svg>',
+    stack: '<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><rect x="1.5" y="5" width="7" height="7.5" rx="1.5"/><rect x="5.5" y="1.5" width="7" height="7.5" rx="1.5" opacity=".6"/></svg>'
+  };
+
+  // ---------- pieces ----------
+  function topbar(title, opts) {
+    return '<header class="sk-topbar">' +
+      (opts.back ? '<button class="sk-icon" data-act="back" aria-label="Back">' + ICON.back + '</button>' : '<span></span>') +
+      '<h1>' + esc(title) + '</h1>' + (opts.right || '<span></span>') + '</header>';
+  }
+  function themeButton() {
+    return '<button class="sk-icon" data-act="theme" aria-label="Switch light or dark">' + ICON.sun + '</button>';
+  }
+  function thinMeter(p, label) {
+    return '<div class="sk-meter is-thin" role="progressbar" aria-label="' + esc(label) + '" aria-valuenow="' + p + '" aria-valuemin="0" aria-valuemax="100"><div class="sk-meter-fill" style="width:' + p + '%"></div></div>';
+  }
+  function stepActions(goalId, s) {
+    if (s.status === 'todo') return '<button class="btn btn-primary" data-act="start" data-goal="' + goalId + '" data-step="' + s.id + '">Start</button>';
+    if (s.status === 'active') return '<button class="btn btn-primary" data-act="finish" data-goal="' + goalId + '" data-step="' + s.id + '">Mark done</button>';
+    return '<button class="btn btn-quiet" data-act="undo" data-goal="' + goalId + '" data-step="' + s.id + '">Undo</button>';
+  }
+  function taskCard(goal, s, i, opts) {
+    var key = 'step:' + s.id;
+    var del = opts.deletable
+      ? '<button class="x' + (view.confirm === key ? ' is-confirm' : '') + '" data-act="del-step" data-goal="' + goal.id + '" data-step="' + s.id + '" aria-label="Delete step ' + esc(s.title) + '">' + (view.confirm === key ? 'Delete?' : '×') + '</button>'
+      : '';
+    return '<article class="sk-card sk-taskcard' + (i % 2 ? ' is-flipped' : '') + (s.status === 'active' ? ' is-active' : '') + (s.status === 'done' ? ' is-done' : '') + '">' +
+      '<div class="sk-tile">' + (s.minutes ? '<b>' + s.minutes + '</b><span class="sk-label">min</span>' : '<b>–</b><span class="sk-label">no est.</span>') + '</div>' +
+      '<div class="sk-body">' +
+        '<div class="top-row"><span class="sk-state' + (s.status === 'active' ? ' is-active' : s.status === 'done' ? ' is-done' : '') + '">' + STATE_WORD[s.status] + '</span>' + del + '</div>' +
+        '<div><h4>' + esc(s.title) + '</h4>' + (opts.from ? '<div class="from">' + esc(goal.title) + '</div>' : '') + '</div>' +
+        '<div class="actions">' + stepActions(goal.id, s) + '</div>' +
+      '</div></article>';
+  }
+
+  // ---------- screens ----------
+  function renderHome() {
+    var goals = todaysGoals();
+    var steps = [].concat.apply([], goals.map(function (g) { return g.steps; }));
+    var stepsDone = steps.filter(function (s) { return s.status === 'done'; }).length;
+    var goalsDone = goals.filter(function (g) { return goalStatus(g) === 'done'; }).length;
+    var minsLeft = steps.reduce(function (n, s) { return n + (s.status === 'done' ? 0 : (s.minutes || 0)); }, 0);
+    var dayPct = steps.length ? Math.round(100 * stepsDone / steps.length)
+      : (goals.length ? Math.round(100 * goalsDone / goals.length) : 0);
+    var next = nextStep(goals);
+    var now = new Date();
+    var h = now.getHours();
+    var left = steps.length - stepsDone;
+
+    var html = topbar('Today', { right: themeButton() }) +
+      '<section class="sk-sheet" aria-label="Today at a glance">' +
+        '<div class="sk-sheet-head"><div><div class="sk-label">' + now.toLocaleDateString([], { weekday: 'long' }) + '</div>' +
+          '<div class="sk-sub">' + (steps.length ? left + (left === 1 ? ' step' : ' steps') + ' left today' : 'No steps yet') + '</div></div>' +
+          '<div class="sk-label">' + now.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' }) + '</div></div>' +
+        '<p class="sk-clock">' + ((h % 12) || 12) + ':' + String(now.getMinutes()).padStart(2, '0') + '<small>' + (h < 12 ? 'am' : 'pm') + '</small></p>' +
+        '<div class="sk-stats">' +
+          '<div class="sk-stat"><span class="sk-label">Steps done</span><span class="sk-v">' + stepsDone + ' of ' + steps.length + '</span>' +
+            '<span class="sk-gauge" style="--at:' + (100 - dayPct) + '%" aria-hidden="true"></span></div>' +
+          '<div class="sk-stat"><span class="sk-label">Goals done</span><span class="sk-v">' + goalsDone + ' of ' + goals.length + '</span></div>' +
+          '<div class="sk-stat"><span class="sk-label">Minutes left</span><span class="sk-v">' + minsLeft + ' min</span></div>' +
+          '<div class="sk-stat"><span class="sk-label">Next up</span><span class="sk-v">' + (next ? esc(next.step.title) : '—') + '</span></div>' +
+        '</div>' +
+        '<div class="meter-block"><div class="sk-label">% of today done</div>' +
+          '<div class="sk-meter" role="progressbar" aria-valuenow="' + dayPct + '" aria-valuemin="0" aria-valuemax="100"><div class="sk-meter-fill" style="width:' + dayPct + '%"></div><span class="sk-meter-v">' + dayPct + '<small>%</small></span></div></div>' +
+      '</section>';
+
+    if (next) {
+      html += '<div class="next-title">' + (next.step.status === 'active' ? 'Doing now' : 'Next small step') + '</div>' +
+        taskCard(next.goal, next.step, 0, { from: true });
+    } else if (goals.length && steps.length) {
+      html += '<p class="empty">Every step is done for today.</p>';
+    }
+    html += '<div style="margin-top:var(--space-4)"><button class="btn btn-ground" data-act="goals">' +
+      (goals.length ? 'See all goals' : 'Add what you want to do today') + '</button></div>';
+    return html + footnote();
+  }
+
+  function renderGoals() {
+    var goals = todaysGoals();
+    var counts = { todo: 0, active: 0, done: 0 };
+    goals.forEach(function (g) { counts[goalStatus(g)]++; });
+    var f = view.filter;
+    function chip(id, label, n) {
+      return '<button class="sk-chip" data-act="filter" data-filter="' + id + '" aria-pressed="' + (f === id) + '">' + label +
+        (n != null ? ' <span class="sk-count">' + n + '</span>' : '') + '</button>';
+    }
+    var html = topbar('Goals', { back: true, right: themeButton() }) +
+      '<nav class="sk-chips" aria-label="Filter goals">' + chip('all', 'All') + chip('todo', 'To do', counts.todo + counts.active) + chip('done', 'Done', counts.done) + '</nav>' +
+      '<form class="sk-card add" data-form="goal" autocomplete="off">' +
+        '<input class="grow" id="new-goal" name="title" maxlength="120" placeholder="What do you want to do today?" aria-label="New goal" required>' +
+        '<button class="btn btn-primary" type="submit">Add</button></form>';
+
+    var groups = [['active', 'In progress'], ['todo', 'To do'], ['done', 'Done']].filter(function (gr) {
+      return f === 'all' || (f === 'todo' && gr[0] !== 'done') || (f === 'done' && gr[0] === 'done');
+    });
+    var any = false;
+    groups.forEach(function (gr) {
+      var list = goals.filter(function (g) { return goalStatus(g) === gr[0]; });
+      if (!list.length) return;
+      any = true;
+      html += '<div class="sk-section">' + gr[1] + '</div><div class="stack">' + list.map(listCard).join('') + '</div>';
+    });
+    if (!any) {
+      html += '<p class="empty">' + (goals.length ? 'Nothing here yet.' : 'Add a goal above, then break it into small steps.') + '</p>';
+    }
+    return html + footnote();
+  }
+
+  function listCard(g) {
+    var st = goalStatus(g);
+    var done = g.steps.filter(function (s) { return s.status === 'done'; }).length;
+    var next = g.steps.find(function (s) { return s.status === 'active'; }) || g.steps.find(function (s) { return s.status === 'todo'; });
+    var sub = !g.steps.length ? 'No steps yet' : st === 'done' ? 'All steps done' : st === 'todo' ? 'Not started yet' : 'Next: ' + next.title;
+    var p = pct(g);
+    return '<button class="sk-card sk-listcard" data-act="open" data-goal="' + g.id + '">' +
+      '<span class="sk-meta"><span>' + ICON.clock + ' Added ' + clockTime(g.createdAt) + '</span><span>' + ICON.stack + ' ' + done + ' of ' + g.steps.length + '</span></span>' +
+      '<h3>' + esc(g.title) + '</h3><p>' + esc(sub) + '</p>' + thinMeter(p, 'Steps done') + '</button>';
+  }
+
+  function renderSteps() {
+    var g = findGoal(view.goalId);
+    if (!g) { view.screen = 'goals'; return renderGoals(); }
+    var key = 'goal:' + g.id;
+    var delBtn = '<button class="sk-icon' + (view.confirm === key ? ' is-confirm' : '') + '" data-act="del-goal" data-goal="' + g.id + '" aria-label="Delete goal">' +
+      (view.confirm === key ? 'Delete?' : ICON.trash) + '</button>';
+    var done = g.steps.filter(function (s) { return s.status === 'done'; }).length;
+    var mins = g.steps.reduce(function (n, s) { return n + (s.minutes || 0); }, 0);
+    var html = topbar('Steps', { back: true, right: delBtn }) +
+      '<h2 class="headline">' + esc(g.title) + '</h2>' +
+      '<div class="subline">' + done + ' of ' + g.steps.length + ' steps done' + (mins ? ' · about ' + mins + ' min in total' : '') + '</div>' +
+      '<div class="subline-meter">' + thinMeter(pct(g), 'Steps done') + '</div>' +
+      '<div class="stack">' + g.steps.map(function (s, i) { return taskCard(g, s, i, { deletable: true }); }).join('') + '</div>';
+    if (!g.steps.length) html += '<p class="empty">Break this into steps small enough to start right away.</p>';
+    html += '<form class="sk-card add" data-form="step" style="margin-top:var(--space-3)" autocomplete="off">' +
+      '<input class="grow" id="new-step" name="title" maxlength="120" placeholder="Add a small step" aria-label="New step" required>' +
+      '<input class="mins" id="new-step-min" name="minutes" type="number" min="1" max="600" inputmode="numeric" placeholder="min" aria-label="Estimated minutes">' +
+      '<button class="btn btn-primary" type="submit">Add</button></form>';
+    return html + footnote();
+  }
+
+  function footnote() {
+    if (!cloudChecked || cloud) return '';
+    return '<p class="note">Saved in this browser only.</p>';
+  }
+
+  function render() {
+    var active = document.activeElement;
+    var focusId = active && active.id;
+    var html = view.screen === 'goals' ? renderGoals() : view.screen === 'steps' ? renderSteps() : renderHome();
+    app.innerHTML = html;
+    if (focusId) {
+      var el = document.getElementById(focusId);
+      if (el) el.focus();
+    }
+  }
+
+  // ---------- actions ----------
+  function setStep(goalId, stepId, status) {
+    var g = findGoal(goalId);
+    var s = g && g.steps.find(function (x) { return x.id === stepId; });
+    if (!s) return;
+    s.status = status;
+    save();
+  }
+
+  app.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-act]');
+    if (!b) return;
+    var act = b.dataset.act;
+    var keepConfirm = false;
+
+    if (act === 'back') {
+      view.screen = view.screen === 'steps' ? 'goals' : 'home';
+    } else if (act === 'goals') {
+      view.screen = 'goals';
+    } else if (act === 'open') {
+      view.screen = 'steps'; view.goalId = b.dataset.goal;
+    } else if (act === 'filter') {
+      view.filter = b.dataset.filter;
+    } else if (act === 'theme') {
+      var dark = document.documentElement.dataset.theme
+        ? document.documentElement.dataset.theme === 'dark'
+        : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.dataset.theme = dark ? 'light' : 'dark';
+      try { localStorage.setItem(THEME_KEY, document.documentElement.dataset.theme); } catch (err) {}
+    } else if (act === 'start') { setStep(b.dataset.goal, b.dataset.step, 'active'); return; }
+    else if (act === 'finish') { setStep(b.dataset.goal, b.dataset.step, 'done'); return; }
+    else if (act === 'undo') { setStep(b.dataset.goal, b.dataset.step, 'todo'); return; }
+    else if (act === 'del-step') {
+      var key = 'step:' + b.dataset.step;
+      if (view.confirm === key) {
+        var g = findGoal(b.dataset.goal);
+        if (g) g.steps = g.steps.filter(function (s) { return s.id !== b.dataset.step; });
+        view.confirm = null; save(); return;
+      }
+      view.confirm = key; keepConfirm = true;
+    } else if (act === 'del-goal') {
+      var gk = 'goal:' + b.dataset.goal;
+      if (view.confirm === gk) {
+        state.goals = state.goals.filter(function (x) { return x.id !== b.dataset.goal; });
+        view.confirm = null; view.screen = 'goals'; save(); return;
+      }
+      view.confirm = gk; keepConfirm = true;
+    }
+    if (!keepConfirm) view.confirm = null;
+    render();
+    if (act !== 'theme' && act !== 'del-step' && act !== 'del-goal') window.scrollTo(0, 0);
+  });
+
+  app.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var form = e.target;
+    var title = form.title.value.trim();
+    if (!title) return;
+    if (form.dataset.form === 'goal') {
+      var g = { id: uid(), title: title, date: todayKey(), createdAt: Date.now(), steps: [] };
+      state.goals.push(g);
+      view.screen = 'steps'; view.goalId = g.id;
+      save();
+      var input = document.getElementById('new-step');
+      if (input) input.focus();
+    } else {
+      var goal = findGoal(view.goalId);
+      if (!goal) return;
+      var m = parseInt(form.minutes.value, 10);
+      goal.steps.push({ id: uid(), title: title, minutes: m > 0 ? m : null, status: 'todo' });
+      save();
+      var again = document.getElementById('new-step');
+      if (again) { again.value = ''; again.focus(); }
+      var min = document.getElementById('new-step-min');
+      if (min) min.value = '';
+    }
+  });
+
+  // ---------- start ----------
+  try {
+    var t = localStorage.getItem(THEME_KEY);
+    if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+  } catch (e) {}
+  state = readLocal() || state;
+  render();
+  connectCloud();
+  // Keep the clock current without disturbing typing.
+  setInterval(function () {
+    var a = document.activeElement;
+    if (view.screen === 'home' && !(a && a.tagName === 'INPUT')) render();
+  }, 20000);
+})();
+</script>
