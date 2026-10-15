@@ -7,24 +7,14 @@
   --ground: #ebebe8; --card: #ffffff; --tile: #efefec;
   --ink: #121211; --muted: #63635e; --card-ink: #121211; --card-muted: #5a5a56;
   --line: #d6d6d2; --chip: #ffffff; --chip-active: #121211; --on-chip-active: #ffffff;
-  --meter-start: #f3e2ad; --meter-end: #a8c2f2; --meter-track: #dbe4f5; --gauge-warm: #f2994a;
+  --meter-start: #f3e2ad; --meter-end: #a8c2f2; --meter-track: #dbe4f5;
   --focus: var(--ink);
+  color-scheme: light;
   --font-sans: "Hanken Grotesk", "Helvetica Neue", Arial, sans-serif;
   --font-mono: "DM Mono", ui-monospace, Menlo, monospace;
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px; --space-7: 48px;
   --radius-md: 24px; --radius-lg: 36px; --radius-pill: 999px;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --ground: #0d0d0c; --ink: #f2f2ef; --muted: #9b9b96; --line: #4a4a47;
-    --chip: #1c1c1b; --chip-active: #f2f2ef; --on-chip-active: #121211; color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --ground: #0d0d0c; --ink: #f2f2ef; --muted: #9b9b96; --line: #4a4a47;
-  --chip: #1c1c1b; --chip-active: #f2f2ef; --on-chip-active: #121211; color-scheme: dark;
-}
-
 * { box-sizing: border-box; }
 body {
   margin: 0; background: var(--ground); color: var(--ink);
@@ -80,8 +70,6 @@ button, input { font: inherit; color: inherit; }
 .sk-tile { border-radius: var(--radius-md); background: var(--tile); color: var(--card-ink); display: flex; flex-direction: column; justify-content: flex-end; padding: var(--space-3); }
 .sk-tile b { font-size: 30px; line-height: 1; font-weight: 300; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 .sk-tile .sk-label { color: var(--card-muted); }
-.sk-taskcard.is-active .sk-tile { background: var(--card-ink); color: var(--card); }
-.sk-taskcard.is-active .sk-tile .sk-label { color: var(--card); opacity: .75; }
 .sk-body { display: flex; flex-direction: column; justify-content: space-between; gap: var(--space-2); padding: var(--space-1); min-width: 0; }
 .sk-body h4 { margin: 0; font-size: 18px; line-height: 1.25; font-weight: 500; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .sk-body .from { color: var(--card-muted); font-size: 13px; }
@@ -89,7 +77,7 @@ button, input { font: inherit; color: inherit; }
 .sk-taskcard.is-done .sk-tile b { color: var(--card-muted); }
 .top-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
 .sk-state { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; padding: 3px 10px; border-radius: var(--radius-pill); border: 1px solid var(--card-muted); color: var(--card-ink); }
-.sk-state.is-active { background: var(--card-ink); border-color: var(--card-ink); color: var(--card); }
+.sk-state.is-active { background: var(--tile); border-color: var(--tile); color: var(--card-ink); }
 .sk-state.is-done { border-color: transparent; background: var(--tile); color: var(--card-muted); }
 .x { width: 32px; height: 32px; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--card-muted); cursor: pointer; font-size: 18px; line-height: 1; }
 .x:hover { background: var(--tile); }
@@ -104,11 +92,9 @@ button, input { font: inherit; color: inherit; }
 .sk-clock { font-size: 76px; line-height: .95; font-weight: 300; letter-spacing: -.03em; margin: 0; font-variant-numeric: tabular-nums; }
 .sk-clock small { font-size: 22px; color: var(--card-muted); letter-spacing: 0; margin-left: var(--space-1); }
 .sk-stats { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5) var(--space-5); align-items: start; }
-.sk-stat { display: grid; grid-template-columns: minmax(0, max-content) 1fr; grid-template-rows: auto 28px; column-gap: var(--space-3); row-gap: var(--space-1); min-width: 0; }
+.sk-stat { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 28px; row-gap: var(--space-1); min-width: 0; }
 .sk-stat .sk-label { grid-column: 1 / -1; color: var(--card-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sk-stat .sk-v { grid-column: 1; align-self: center; font-size: 22px; line-height: 28px; letter-spacing: -.01em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sk-gauge { grid-column: 2; grid-row: 2; align-self: center; justify-self: start; width: 4px; height: 26px; border-radius: var(--radius-pill); background: linear-gradient(180deg, var(--gauge-warm), var(--meter-end)); position: relative; }
-.sk-gauge::after { content: ""; position: absolute; left: -5px; width: 14px; height: 2px; background: var(--card-ink); top: var(--at, 50%); }
 .meter-block { display: flex; flex-direction: column; gap: var(--space-2); }
 .meter-block .sk-label { color: var(--card-muted); }
 .sk-meter { display: block; position: relative; height: 60px; border-radius: var(--radius-md); background: var(--meter-track); overflow: hidden; }
@@ -142,7 +128,6 @@ button, input { font: inherit; color: inherit; }
   'use strict';
 
   var LOCAL_KEY = 'accountability-buddy:v2';
-  var THEME_KEY = 'accountability-buddy:theme';
   var app = document.getElementById('app');
 
   // ---------- state ----------
@@ -275,9 +260,6 @@ button, input { font: inherit; color: inherit; }
       (opts.back ? '<button class="sk-icon" data-act="back" aria-label="Back">' + ICON.back + '</button>' : '<span></span>') +
       '<h1>' + esc(title) + '</h1>' + (opts.right || '<span></span>') + '</header>';
   }
-  function themeButton() {
-    return '<button class="sk-icon" data-act="theme" aria-label="Switch light or dark">' + ICON.sun + '</button>';
-  }
   function meter(p, label, small) {
     return '<span class="sk-meter' + (small ? ' is-small' : '') + '" role="progressbar" aria-label="' + esc(label) + '" aria-valuenow="' + p + '" aria-valuemin="0" aria-valuemax="100">' +
       '<span class="sk-meter-fill" style="width:' + p + '%"></span><span class="sk-meter-v">' + p + '<small>%</small></span></span>';
@@ -344,17 +326,16 @@ button, input { font: inherit; color: inherit; }
     else if (!left) sub = 'All subtasks done';
     else sub = plural(left, 'subtask') + ' left today';
 
-    var html = topbar('Today', { right: themeButton() }) +
+    var html = topbar('Today', {}) +
       '<section class="sk-sheet" aria-label="Today at a glance">' +
         '<div class="sk-sheet-head"><div><div class="sk-label day">' + now.toLocaleDateString([], { weekday: 'long' }) + ICON.weather + '</div>' +
           '<div class="sk-sub">' + sub + '</div></div>' +
           '<div class="sk-label">' + now.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' }) + '</div></div>' +
         '<p class="sk-clock">' + ((h % 12) || 12) + ':' + String(now.getMinutes()).padStart(2, '0') + '<small>' + (h < 12 ? 'am' : 'pm') + '</small></p>' +
         '<div class="sk-stats">' +
-          '<div class="sk-stat"><span class="sk-label">Subtasks done</span><span class="sk-v">' + stepsDone + ' of ' + steps.length + '</span>' +
-            '<span class="sk-gauge" style="--at:' + (100 - dayPct) + '%" aria-hidden="true"></span></div>' +
           '<div class="sk-stat"><span class="sk-label">Goals done</span><span class="sk-v">' + goalsDone + ' of ' + goals.length + '</span></div>' +
           '<div class="sk-stat"><span class="sk-label">Minutes left</span><span class="sk-v">' + minsLeft + ' min</span></div>' +
+          '<div class="sk-stat"><span class="sk-label">Subtasks done</span><span class="sk-v">' + stepsDone + ' of ' + steps.length + '</span></div>' +
           '<div class="sk-stat"><span class="sk-label">Next up</span><span class="sk-v"' + (next ? ' title="' + esc(next.step.title) + '"' : '') + '>' +
             (next ? esc(next.step.title) : steps.length && !left ? 'All done' : 'Add a subtask') + '</span></div>' +
         '</div>' +
@@ -483,12 +464,6 @@ button, input { font: inherit; color: inherit; }
       return;
     } else if (act === 'filter') {
       view.filter = b.dataset.filter;
-    } else if (act === 'theme') {
-      var dark = document.documentElement.dataset.theme
-        ? document.documentElement.dataset.theme === 'dark'
-        : window.matchMedia('(prefers-color-scheme: dark)').matches;
-      document.documentElement.dataset.theme = dark ? 'light' : 'dark';
-      try { localStorage.setItem(THEME_KEY, document.documentElement.dataset.theme); } catch (err) {}
     } else if (act === 'start') { setStep(b.dataset.goal, b.dataset.step, 'active'); return; }
     else if (act === 'finish') { setStep(b.dataset.goal, b.dataset.step, 'done'); return; }
     else if (act === 'undo') { setStep(b.dataset.goal, b.dataset.step, 'todo'); return; }
@@ -510,7 +485,7 @@ button, input { font: inherit; color: inherit; }
     }
     if (!keepConfirm) view.confirm = null;
     render();
-    if (act !== 'theme' && act !== 'del-step' && act !== 'del-goal') window.scrollTo(0, 0);
+    if (act !== 'del-step' && act !== 'del-goal') window.scrollTo(0, 0);
   });
 
   app.addEventListener('submit', function (e) {
@@ -539,10 +514,6 @@ button, input { font: inherit; color: inherit; }
   });
 
   // ---------- start ----------
-  try {
-    var t = localStorage.getItem(THEME_KEY);
-    if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
-  } catch (e) {}
   state = readLocal() || state;
   render();
   connectCloud();
